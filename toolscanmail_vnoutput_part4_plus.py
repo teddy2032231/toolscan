@@ -1,0 +1,1303 @@
+#!/usr/bin/env python3
+# -*- coding: utf-8 -*-
+"""
+Vietnamese Email Filter - VNOUTPUT PART4+ Version
+
+Mục tiêu:
+- Dựa trên file mẫu email Việt Nam part 2 + part 3 + part 4 để nâng cấp logic nhận diện.
+- Chỉ xuất EMAIL, không xuất password/credential thô.
+- Ưu tiên bắt được nhiều mail Việt hơn nhưng hạn chế mail nước ngoài bằng luật ghép bằng chứng.
+
+Output:
+- Chỉ tạo đúng 1 file duy nhất: vnoutput.txt
+- File này chỉ chứa email được nhận diện là Việt Nam.
+- Không tạo review/report/unknown.
+"""
+
+from __future__ import annotations
+
+import re
+import threading
+import unicodedata
+from dataclasses import dataclass
+from pathlib import Path
+from typing import Iterable, List, Sequence, Set, Tuple
+
+import tkinter as tk
+from tkinter import filedialog, messagebox, ttk
+
+# ============================================================
+# DOMAIN DATA
+# ============================================================
+
+# Domain/nhà cung cấp có dấu hiệu Việt Nam rất mạnh.
+VN_DOMAIN_EXACT = {
+    "yahoo.com.vn", "yahoo.co.vn", "yahoo.vn",
+    "yhoo.com.vn", "yhaoo.com.vn", "yohoo.com.vn", "yohoo.vn.com", "zing.con.vn",
+    "zing.vn", "zing.com", "zing.com.vn", "zingme.com",
+    "go.vn", "vng.com.vn", "fpt.vn", "fpt.com.vn", "vnpt.vn",
+    "viettel.vn", "mobifone.vn", "vinaphone.vn", "zalo.me",
+    "email.com.vn", "gmail.com.vn", "gmai.com.vn",
+    "hcmus.edu.vn", "hutech.edu.vn", "ctu.edu.vn", "hcmut.edu.vn",
+    "uit.edu.vn", "ueh.edu.vn", "neu.edu.vn", "vnu.edu.vn", "haui.edu.vn",
+}
+
+VN_DOMAIN_SUFFIXES = (
+    ".vn", ".com.vn", ".edu.vn", ".gov.vn", ".net.vn", ".org.vn",
+    ".ac.vn", ".co.vn", ".biz.vn", ".info.vn", ".name.vn", ".pro.vn",
+)
+
+# Domain quốc tế/trung tính, cần nhìn local-part kỹ hơn.
+NEUTRAL_DOMAINS = {
+    "gmail.com", "googlemail.com", "gmai.com", "gmal.com", "gamil.com", "gmael.com",
+    "gmial.com", "gmaill.com", "gmai.con", "gmail.con", "gmai.com.vn",
+    "hamil.com", "hmail.com", "homail.com", "hotmai.com", "hotmal.com",
+    "yahoo.com", "yhaoo.com", "yhoo.com", "yohoo.com", "yaho.com", "yahoo.con",
+    "ymail.com", "rocketmail.com", "yohoo.vn.com", "yahoo.com.vn.com",
+    "hotmail.com", "outlook.com", "outlok.com", "live.com", "msn.com",
+    "icloud.com", "me.com", "mac.com", "mail.com", "email.com",
+    "protonmail.com", "proton.me", "aol.com", "facebook.com", "ovi.com",
+}
+
+FOREIGN_TLD_SUFFIXES = (
+    ".br", ".ru", ".cn", ".de", ".fr", ".uk", ".co.uk", ".es", ".pt",
+    ".in", ".jp", ".kr", ".id", ".th", ".my", ".ph", ".pk", ".tr",
+    ".mx", ".ar", ".pl", ".it", ".nl", ".se", ".no", ".fi", ".gr",
+    ".ro", ".cz", ".ua", ".ir", ".sa", ".ae", ".eg", ".za", ".bd",
+    ".sg", ".au", ".ca",
+)
+
+# ============================================================
+# VIETNAMESE NAME DATA
+# ============================================================
+
+VN_STRONG_SURNAMES = {
+    "nguyen", "tran", "pham", "hoang", "huynh", "phan", "truong", "duong",
+    "dang", "dinh", "bui", "ngo", "doan", "quach", "trinh", "chau", "luong",
+    "vong", "dovan", "levan", "vuvan", "tang", "to", "ton", "kieu", "ta", "ha",
+}
+
+# Họ ngắn/dễ lẫn: chỉ dùng khi có thêm tên Việt rõ.
+VN_SHORT_SURNAMES = {
+    "le", "vo", "vu", "do", "ho", "ly", "mai", "cao", "dao", "la", "luu",
+    "lam", "thai", "bach", "tong", "ong", "mac", "han", "ninh", "khuc",
+}
+VN_SURNAMES_ALL = VN_STRONG_SURNAMES | VN_SHORT_SURNAMES
+
+VN_MIDDLE = {
+    "van", "thi", "duc", "huu", "minh", "ngoc", "thanh", "quang", "xuan",
+    "hoang", "anh", "bao", "gia", "nhat", "duy", "cong", "khac", "tuan",
+    "tien", "huy", "trung", "phu", "phuc", "hoai", "nhu", "kim", "nghia",
+    "the", "quoc", "manh", "hai", "ba", "thien", "trong", "cao", "hong",
+}
+
+VN_GIVEN = {
+    # Nam / dùng chung
+    "minh", "trung", "quang", "hieu", "huy", "duy", "tuan", "hung", "cuong",
+    "son", "long", "nam", "hai", "vinh", "dat", "loc", "bao", "tien", "duc",
+    "nhat", "viet", "lam", "binh", "khanh", "khoa", "phuc", "phuoc", "thien",
+    "tai", "thang", "thinh", "quan", "tung", "kien", "toan", "tri", "tin",
+    "phong", "kiet", "nghia", "nhan", "tam", "tan", "an", "phat", "nhon",
+    "khoi", "nhien", "manh", "khang", "duan", "hoan", "hao", "hiep", "thuan",
+    "thieu", "thong", "trieu", "thuc", "ngan", "phu", "loi", "tai", "sang",
+    # Nữ / dùng chung
+    "linh", "hoa", "trang", "yen", "nhung", "quynh", "giang", "thuy", "thao",
+    "tuyet", "huyen", "ngoc", "thanh", "phuong", "chi", "nhi", "uyen", "trinh",
+    "loan", "hanh", "diem", "dung", "thu", "nga", "oanh", "truc", "tram",
+    "hien", "hue", "thuong", "diep", "thoa", "my", "ly", "vy", "tu", "vi",
+    "na", "ha", "mai", "anh", "han", "nhu", "lan", "chau", "nguyet", "dao",
+    "hang", "hoa", "thuy", "nhi", "giau", "loan", "xuyen", "nha", "dieu",
+}
+
+# Âm tiết quá ngắn/dễ nhầm, không dùng một mình để kết luận.
+VN_WEAK_SYLLABLES = {
+    "an", "my", "ly", "vy", "tu", "vi", "na", "ha", "le", "do", "ho", "vo", "vu",
+    "bo", "be", "te", "ti", "mi", "no", "on", "ma", "la", "to", "ta", "lu", "ai", "ba",
+}
+
+VN_STRONG_NAME_PARTS = (VN_MIDDLE | VN_GIVEN) - VN_WEAK_SYLLABLES
+# Tên ghép/tên viết liền rất hay gặp trong file VN part 2/part 3.
+# Các cụm này chỉ dùng như "name-part" khi đi cùng họ hoặc khi ghép thành pattern rõ,
+# không dùng một mình để kết luận bừa.
+VN_COMPOUND_NAME_PARTS = {
+    "tramy", "baoanh", "baongoc", "baoxuyen", "ngocanh", "ngoclinh", "ngocphuong",
+    "ngocduy", "ngocdung", "ngochan", "ngocvy", "ngocmai", "ngoctuyet",
+    "phuonganh", "phuongthao", "phuongthuy", "phuongnguyen", "phuongvu",
+    "quynhngoc", "quynhthu", "quynhnhu", "quynhle", "quynhtrang",
+    "thanhnga", "thanhngan", "thanhvan", "thanhtruc", "thanhtung", "thanhtam",
+    "thanhthao", "thanhphong", "thanhson", "thanhdat", "thanhcong",
+    "thuytien", "thuybich", "thuyduong", "thuytrang", "thuyloan", "thuynga",
+    "tuyetvy", "tuyetmai", "tuyetlan", "tuyetnhi", "myhanh", "mylinh",
+    "minhhai", "minhcong", "minhkha", "minhkhoa", "minhquan", "minhthuan",
+    "minhtuan", "minhtrung", "minhnhat", "minhphuoc", "minhhuy", "minhduc",
+    "quocanh", "quocbao", "quocdat", "quocviet", "quoccuong", "quockiet",
+    "hoanglong", "hoangphuoc", "hoangnam", "hoangtung", "hoangson", "hoangminh",
+    "vannam", "vanloi", "vanlinh", "vantuan", "vanthang", "vankien", "vanduc",
+    "huutho", "huuhieu", "huutai", "huutien", "huynhduc", "huynhvan",
+    "tuananh", "tuanphong", "tuanvu", "tuankiet", "tuanhung", "duykhanh",
+    "duyphong", "duynhat", "duynguyen", "duytan", "trungkien", "trungnghia",
+    "trungtin", "trungtuan", "trungdat", "trungdung", "baoduy", "baolanh",
+    "baotran", "baophuc", "xuanthang", "xuantien", "xuanhoi", "xuanloi",
+    "huyhoang", "huycuong", "huykhanh", "huynguyen", "huynhphuoc",
+    "vietquang", "viettrung", "vietthuoc", "vietthanh", "vietanh",
+    "yennhi", "haiyen", "haiquan", "haidang", "haianh", "haphuong",
+    "dangquanghai", "dangthien", "dangvan", "dangtung", "dangsau",
+}
+
+VN_ANY_NAME_PARTS = VN_MIDDLE | VN_GIVEN | VN_WEAK_SYLLABLES | VN_COMPOUND_NAME_PARTS
+VN_STRONG_NAME_PARTS = VN_STRONG_NAME_PARTS | VN_COMPOUND_NAME_PARTS
+# Khi tách chuỗi viết liền, không dùng tên ghép nguyên khối để tránh chặn backtracking
+# ví dụ "minhhai" phải tách được thành "minh"+"hai", không dừng ở token "minhhai".
+VN_SEGMENT_NAME_PARTS = VN_STRONG_NAME_PARTS - VN_COMPOUND_NAME_PARTS
+
+# Các cụm style/teencode Việt rút từ file mẫu. Không dùng "love" đơn lẻ.
+VN_STYLE_STRONG = {
+    "yeuem", "emyeu", "anhyeu", "yeuanh", "yeuminh", "yeunhieu", "yeumai",
+    "iuem", "iuanh", "emiu", "anhiu", "thuongem", "thuonganh",
+    "maimai", "tinhyeu", "tinhban", "codon", "c0d0n", "chungtinh", "datinh",
+    "nhoc", "nhok", "nhox", "xinhgai", "deptrai", "dangyeu", "dethuong",
+    "langtu", "congtu", "hoangtu", "buidoi", "chandoi", "changtrai", "cobe", "cauchu",
+    "heocon", "heo", "pe", "nguoiviet", "nguoiyeu", "timgirl", "timgai", "timem",
+    "nhongheo", "buon", "noibuon", "giacmo", "giacmotinhyeu", "nuocmat", "nhomai",
+    # Mẫu part 3: tình cảm/teencode Việt, chỉ dùng theo phrase dài, không dùng "love" đơn lẻ.
+    "traitim", "trai_tim", "trajtjm", "traitimbang", "traitimbuon", "trondoi",
+    "benem", "benanh", "bennhau", "nhoem", "nhoanh", "nhominh", "mongem", "monganh",
+    "chiatay", "khongten", "khongkhoc", "khongcamxuc", "khongsoaica", "khongbaogio",
+    "maiyeuanh", "maiyeuem", "maiyeuminh", "emmaila", "anhla", "anhlagi", "emla",
+    "yeuchiminhem", "yeuminhem", "chiyeuminhem", "chiyeuanh", "chiyeuem",
+    "satthu", "thienthan", "thienthanh", "nuthan", "daica", "daigia", "daihaohoa",
+    "tieuthu", "congchua", "congtu", "caube", "cobe", "hotboy", "hotgirl",
+    "deptrai", "depzai", "xinhzai", "zethuong", "dethuong", "dangiu", "dangyeu",
+    "nhockute", "nhoxkute", "babycute", "babykute", "kutebaby", "sock", "xiteen",
+    "latao", "latoi", "buidoi", "danchoi", "anchoi", "chandoi", "changkhothuychung",
+    "thuychung", "timbx", "timvo", "timnguoiyeu", "timgirl", "ditimgirl", "ditim",
+    "motnuaditim", "motmatmotcon", "cuocdoi", "kiepngheo", "nguoivanchuyen",
+    "noibuonmangtenem", "nuocmatroi", "giotnuocmat", "mauhong", "nucuoithienthan",
+    "thienduong", "saobang", "bongdem", "phongtran", "hoatuyet", "lilom",
+    # Biến thể teencode chưa normalize hết được.
+    "l0v3", "c0d0n", "nh0k", "nh0x", "kut3", "p3", "zai", "zethuong",
+    "tjnk", "tjnky3u", "maiy3u", "m4jm4j", "b3n3m", "j3m", "chj",
+}
+VN_STYLE_WEAK = {"kute", "kut3", "cute", "vip", "pro", "baby", "boy", "girl", "forever", "online"}
+
+VN_EXPLICIT_MARKERS = {
+    "vietnam", "vietname", "nguoiviet", "viet-nam", "viet_nam", "vietnamese",
+    "vietnamnet", "vnexpress",
+}
+VN_EXPLICIT_TOKENS = {"viet", "vietnam", "nguoiviet", "vietnamese", "vn"}
+
+VN_LOCATION_STRONG = {
+    "hanoi", "ha-noi", "ha_noi", "saigon", "sai-gon", "sai_gon", "tphcm",
+    "hochiminh", "ho-chi-minh", "ho_chi_minh", "danang", "da-nang", "da_nang",
+    "haiphong", "hai-phong", "hai_phong", "cantho", "can-tho", "can_tho",
+    "nhatrang", "nha-trang", "nha_trang", "vungtau", "vung-tau", "vung_tau",
+    "dalat", "da-lat", "da_lat", "binhduong", "dongnai", "angiang", "kiengiang",
+    "phuyen", "ninhthuan", "binhthuan", "quangninh", "quangnam", "quangngai",
+    "daklak", "buonmathuot", "bmt", "gialai", "kontum", "camau", "soctrang",
+    "bentre", "tayninh", "bacninh", "bacgiang", "namdinh", "thaibinh",
+    "thanhhoa", "nghean", "hatinh", "hue", "vinhlong", "dongthap", "longan",
+    "travinh", "hagiang", "laocai", "haugiang", "daknong", "binhphuoc",
+    "binhdinh", "quangtri", "quangbinh", "khanhhoa", "haiduong", "hungyen",
+    "phutho", "vinhphuc", "yenbai", "sonla", "langson", "caobang", "backan",
+    "dienbien", "laichau", "binhgia", "quynhon", "quynhon", "phanthiet",
+}
+VN_LOCATION_WEAK = {
+    "hn", "sg", "hcm", "dn", "ct", "bd", "vt", "hp", "qn", "py", "nt", "kg", "ag", "tn",
+    "bmt", "bp", "bn", "bg", "qb", "qt", "nd", "tb", "th", "ht", "vl", "st", "cm",
+    "bt", "la", "dt", "hg", "hd", "hy", "vp", "pt", "ls", "lc", "sl", "db", "gl",
+    "kh", "khánh", "qng", "qnam", "qtri"
+}
+
+VN_ORG_TOKENS = {
+    "haui", "hcmus", "hcmut", "uit", "hutech", "fpt", "vng", "vnpt", "viettel", "mobifone",
+    "vinaphone", "sgu", "vcu", "bmt", "bk", "ktqd", "ueh", "neu", "vnu",
+}
+
+# ============================================================
+# FOREIGN / NOISE DATA
+# ============================================================
+
+FOREIGN_NAMES = {
+    "john", "david", "michael", "robert", "james", "william", "richard", "joseph",
+    "thomas", "charles", "christopher", "daniel", "paul", "mark", "george", "steven",
+    "kevin", "brian", "edward", "ronald", "anthony", "andrew", "kenneth", "joshua",
+    "matthew", "donald", "stephen", "scott", "eric", "frank", "gary", "larry", "justin",
+    "mary", "patricia", "jennifer", "linda", "elizabeth", "barbara", "susan", "jessica",
+    "sarah", "karen", "nancy", "lisa", "betty", "margaret", "sandra", "ashley",
+    "kimberly", "emily", "donna", "michelle", "carol", "amanda", "melissa", "deborah",
+    "laura", "stephanie", "rebecca", "sharon", "katherine", "catherine", "christine",
+    "jose", "juan", "carlos", "pedro", "luis", "miguel", "antonio", "jesus", "maria",
+    "fernando", "manuel", "ricardo", "jorge", "roberto", "marcos", "rafael", "joao",
+    "ahmed", "hassan", "ali", "mustafa", "mohamed", "muhammad", "abdul", "abdullah",
+    "ibrahim", "fatima", "ayesha", "priya", "rahul", "amit", "sanjay", "ravi", "vijay",
+    "anil", "arun", "kumar", "singh", "sharma", "patel", "gupta", "khan",
+    "sergey", "alexey", "ivan", "olga", "anna", "marie", "pierre", "jean", "hans",
+    "klaus", "hiroshi", "takashi", "yuki", "akira", "sato", "tanaka", "park", "wang",
+    "zhang", "chen", "liu", "wong", "lim", "smith", "brown", "miller", "wilson",
+    "garcia", "martinez", "rodriguez", "lopez", "gonzalez", "hernandez", "samuel", "alice",
+}
+AMBIGUOUS_FOREIGN_ASIAN = {"kim", "lee", "li"}
+
+COUNTRY_CITY_FOREIGN = {
+    "usa", "america", "canada", "brazil", "brasil", "russia", "china", "japan", "korea",
+    "india", "indonesia", "thailand", "malaysia", "philippines", "france", "germany",
+    "spain", "portugal", "italy", "mexico", "london", "paris", "berlin", "tokyo",
+    "seoul", "moscow", "dubai", "delhi", "mumbai", "jakarta", "bangkok", "manila",
+}
+
+GENERIC_OR_BUSINESS_WORDS = {
+    "admin", "administrator", "support", "contact", "info", "sales", "service", "help",
+    "office", "team", "billing", "account", "security", "noreply", "no-reply", "newsletter",
+    "mail", "email", "test", "demo", "user", "customer", "client", "store", "shop",
+    "marketing", "booking", "order", "payment", "invoice", "jobs", "career", "hr", "system",
+}
+
+ENGLISH_COMMON_WORDS = {
+    "love", "happy", "baby", "girl", "boy", "family", "music", "game", "gaming", "photo",
+    "cool", "nice", "best", "super", "master", "king", "queen", "dragon", "angel", "dark",
+    "light", "star", "sun", "moon", "flower", "rose", "blue", "green", "red", "black",
+    "white", "home", "work", "school", "student", "teacher", "hello", "world", "winner",
+}
+
+EMAIL_RE = re.compile(
+    r"(?<![A-Za-z0-9._%+-])([A-Za-z0-9._%+-]{1,100}@[A-Za-z0-9.-]+\.[A-Za-z]{2,24})(?![A-Za-z0-9._%+-])"
+)
+
+
+# ============================================================
+# PART 4 LEARNED UPDATES
+# ============================================================
+# Các luật dưới đây được rút thêm từ file VN part 4:
+# - Nhiều email Facebook dạng họ.tên.số@facebook.com.
+# - Nhiều domain gõ sai: gamal/gamll/yahho/yaoo/yhoo/yahooo/yahou.
+# - Nhiều tên Việt ghép viết liền: anhtuan, hoangduc, baochau, bichthuy...
+# - Nhiều marker địa danh/tỉnh, trường học/doanh nghiệp Việt.
+# Lưu ý: vẫn không cho numeric-only @facebook.com vào output vì chỉ từ ID số không đủ chắc là VN.
+
+VN_DOMAIN_EXACT.update({
+    "zing.me", "zing.vn.com", "zing.com.vn", "yahoo.vn", "yahoo.coml.vn",
+    "yhaoo.com.vn", "yahho.com.vn", "yaoo.com.vn", "yahooo.com.vn",
+    "yahoo.con.vn", "yahoo.co.vn", "facebook.vn", "email.com.vn",
+    "gamll.com.vn", "gamal.com.vn", "gmail.com.vn",
+})
+
+NEUTRAL_DOMAINS.update({
+    "gamal.com", "gamll.com", "gamill.com", "gamil.com", "gmai.com", "gmal.com",
+    "gmaill.com", "gmail.con", "gamll.com", "gamll.com.vn",
+    "yahho.com", "yahho.com.vn", "yhaoo.com", "yhaoo.com.vn", "yhoo.com",
+    "yhoo.com.vn", "yooh.com", "yooh.com.vn", "yaoo.com", "yaoo.com.vn",
+    "yahooo.com.vn", "yahou.com", "zing.me", "zing.com", "zing.com.vn",
+    "facebook.vn", "yahoo.vn", "hotmail.ca", "yahoo.com.tw",
+})
+
+# Typos họ Nguyễn xuất hiện nhiều trong dữ liệu thật.
+VN_STRONG_SURNAMES.update({"nguyn", "ngyuen", "nguen", "nguyenngoc", "nguyenthi", "nguyenvan"})
+VN_SURNAMES_ALL = VN_STRONG_SURNAMES | VN_SHORT_SURNAMES
+
+VN_GIVEN.update({
+    "thuyet", "thoai", "toai", "tiep", "tuyen", "quyen", "dieu", "dai",
+    "duan", "duyen", "hieu", "hien", "hieu", "han", "hau", "hieu", "hoai",
+    "khuong", "khiem", "khue", "kieu", "kieu", "my", "nhut", "ninh",
+    "oanh", "quy", "quyen", "sinh", "su", "sy", "tho", "thoa", "thuyet",
+    "thuylinh", "triet", "truc", "tuong", "uyen", "yến", "yen", "vy",
+})
+VN_MIDDLE.update({"ba", "dinh", "do", "ho", "ngoc", "phuoc", "thi", "thanh", "trong", "xuan"})
+
+VN_COMPOUND_NAME_PARTS.update({
+    # Anh + tên
+    "anhtuan", "anhduc", "anhvu", "anhthu", "anhdao", "anhtho", "anhhuy",
+    "anhphuc", "anhkhoa", "anhquan", "anhdung", "anhngoc", "anhkiet", "anhminh",
+    "anhtai", "anhthao", "anhtien", "anhtuyet", "anhvan", "anhviet", "anhquang",
+    # Bảo/Bích/Châu/Cẩm
+    "baochau", "baohan", "baohan", "baohuy", "baokhanh", "baophuc", "baotran",
+    "bichthuy", "bichngoc", "bichnhung", "bichhanh", "bichtram", "bichtrang",
+    "camtu", "chaubaohan", "chauquochuy", "chautrinh",
+    # Công/Cường/Dũng/Đức/Định
+    "congbinh", "congtam", "congthanh", "congyen", "congvinh", "cuongpham",
+    "danhngoc", "daongan", "daoquynhnga", "dinhhai", "dinhquy", "dinhnguyen",
+    "dinhbadat", "duclong", "duchiep", "ducmanh", "ducnghia", "ducphuc", "ducminh",
+    "dungnguyen", "dungpham", "duongduc", "duongdoan", "duongthanh", "duongthi",
+    # Gia/Giang/Hải/Hạnh/Hoa/Hoàng/Hồng/Huỳnh/Hương
+    "giahan", "giahuy", "giahoa", "giangtran", "giangvu", "haiyen", "haidung",
+    "haithanh", "haidang", "haianh", "hanhngoc", "hanhpham", "hoabapbay",
+    "hoangduc", "hoangtai", "hoangquy", "hoangdao", "hoangtrung", "hoangvu",
+    "hoangthanh", "hoangchuyen", "hoangnam", "hoangphuc", "hoanglong", "hoangson",
+    "hongquan", "hongson", "hongphuc", "hongnhung", "hongngoc", "hongduc",
+    "huonggiang", "huongpham", "huynhhao", "huynhphuc", "huynhkim", "huynhthi",
+    # Khánh/Khoa/Kiều/Kim/Lâm/Lê/Lương
+    "khanhduy", "khanhvan", "khanhlinh", "khanhvy", "khanhhien", "khoahong",
+    "kieuanh", "kieuhanh", "kimloan", "kimtuyen", "kimdung", "kimtruc",
+    "lamnhat", "lamhoang", "lengoc", "leduy", "lehoang", "lequoc", "letrung",
+    "lethanh", "levan", "lehung", "lephung", "letrunghuynh", "luongvan", "luongminh",
+    # Mai/Minh/Ngọc/Nguyễn/Phạm/Phan/Phương/Quang/Quốc
+    "maihuong", "maithanh", "maituan", "minhtri", "minhnguyen", "minhngo",
+    "minhson", "minhanh", "minhhoa", "minhthong", "minhtriet", "minhtinh",
+    "ngocnhu", "ngoctiep", "ngocdoan", "ngocbach", "ngocchuong", "ngockhanh",
+    "nguyenkhanh", "nguyenhoai", "nguyenngoc", "nguyentuan", "nguyenthanh",
+    "nguyenvan", "nguyenminh", "nguyenduy", "nguyenquoc", "nguyentat", "nguyenhoa",
+    "nguyenkhoi", "nguyenvu", "nguyenly", "nguyenphat", "nguyentruong", "nguyenviet",
+    "phamnhan", "phamhang", "phamlinh", "phamhoang", "phamquang", "phamthanh",
+    "phanvanduc", "phanthoa", "phannguyen", "phatnguyen", "phuonganh", "phuongnguyen",
+    "phuongtran", "phuongthuy", "phuongnam", "phuongtam", "phuongtrang", "quangdong",
+    "quangtruong", "quangtam", "quockhanh", "quocviet", "quochuy", "quocdat",
+    # Tạ/Thái/Thanh/Thảo/Thắng/Thiện/Thịnh/Thu/Thúy/Trang/Trần/Trịnh/Trung/Tuấn/Vân/Vũ/Võ
+    "tainguyen", "thaihoan", "thaithach", "thanhthao", "thanhthuy", "thanhphuc",
+    "thanhhung", "thanhhai", "thanhhoa", "thanhgiang", "thanhmai", "thanhquang",
+    "thanhtruc", "thaochi", "thaovy", "thanglinh", "thienttt", "thienbinh",
+    "thienluong", "thienthanh", "thinhnguyen", "thithanh", "thugiang", "thuhang",
+    "thuhuyen", "thuha", "thuylinh", "thuyhan", "thuydiem", "thuyquynh", "thuytrung",
+    "trangdien", "trangninh", "tranghien", "tranghg", "tramy", "tranvan", "trananh",
+    "tranan", "tranphuoc", "tranhuu", "trangia", "tranhai", "tranbang", "trandung",
+    "trannguyen", "tranthanh", "trantrung", "trantuong", "trinhvy", "trinhminh",
+    "trinhhoang", "trinhnhat", "trieuminh", "trieuvy", "trieutam", "trunganh",
+    "trunghieu", "trungdang", "trungtien", "trungluu", "trungpv", "tuananh",
+    "tuannhat", "tuankiet", "tuanevn", "vancuong", "vanquang", "vantruong",
+    "vandai", "vanluong", "vietson", "vietth", "vothanh", "vuduy", "vuvanquang",
+    "vuhaigtcc", "vuminhngoc", "vuquanghung", "vuthuhien", "vutran",
+    # Một số nickname/tên ghép Việt rất hay gặp trong part 4
+    "baodang", "baoduy", "baochau", "baolanh", "baochausushi", "nganhanguyen",
+    "ngantuan", "ngoclinhtvt", "nguyentramy", "phuongduy", "trungdangsim",
+})
+
+VN_ANY_NAME_PARTS = VN_MIDDLE | VN_GIVEN | VN_WEAK_SYLLABLES | VN_COMPOUND_NAME_PARTS
+VN_STRONG_NAME_PARTS = (VN_MIDDLE | VN_GIVEN | VN_COMPOUND_NAME_PARTS) - VN_WEAK_SYLLABLES
+VN_SEGMENT_NAME_PARTS = VN_STRONG_NAME_PARTS - VN_COMPOUND_NAME_PARTS
+
+VN_STYLE_STRONG.update({
+    "anhchang", "anhchiyeu", "anhvaem", "emlatatca", "emlaanh", "emlacuatui",
+    "batdaucuocchoi", "mavalatoi", "notrino", "caubevuotthoigian", "cobola",
+    "cobeyeudoi", "trondoibenemmaimai", "trondoibenem", "songchetvitinh", "lycaphesuada",
+    "sinhvienngheo", "solotinhyeu", "iloveyou", "il0v3y0u", "vk", "ck",
+    "yeuchong", "yeuvo", "yeulatot", "yeulayeu", "toiyeuban", "toiyeubannhiu",
+    "toianhha", "nguoinhen", "nguochet", "tapkhoc", "haybuongtay", "khongyeu",
+    "khongbiet", "khoclamgi", "lamsaoquenduocem", "mongemquayve", "muadongkhongcoem",
+    "congtubotanchoi", "congtuthieutien", "hoangturungxanh", "tieudaigia", "tieuthusanhdieu",
+    "meocondeghet", "satthutinhyeu", "changtraidathue", "changngocchungtinh",
+    "nh0ks0ck", "kokhoc", "k0kh0c", "viai", "pemy", "peheo", "pekun", "pevinh",
+    "kute_baclieu", "nhockeomut", "nhoxvancute", "nhocxinh", "nhockcute", "nhockute",
+    "thienthan", "thienthan_phale", "traitimubuon", "traitimubuon", "nacthangtinhyeu",
+    "tinhyeubuon", "tinhyeutrandaynuocmat", "nuocmatcuathienthan", "hoahongtocngan",
+    "dollviet", "hunterkingvnn", "vietson", "vietth", "vutru", "giaolacualinh",
+    "bepkhanhvy", "bp_shop", "nhasachviet", "kimheesunvnfc", "vietanh",
+})
+VN_STYLE_WEAK.update({"teen", "xiteen", "sock", "sieuway", "danchoj", "fa", "heo", "pe", "kun", "lun"})
+
+VN_LOCATION_STRONG.update({
+    "baclieu", "lucyen", "maokhe", "phuthuong", "tamky", "binhchanh", "cuuchi", "cuchi",
+    "soctrang", "bacgiang", "baoloc", "dbp", "dienbienphu", "brvt", "soctrang", "longan",
+    "noibai", "sondong", "phuyen", "thainguyen", "baclieu", "yenbai", "phuthọ", "phutho",
+    "quangtri", "quangbinh", "quangngai", "quangnam", "thaibinh", "namdinh", "thanhhoa",
+    "bacninh", "bacgiang", "kontum", "daklak", "gialai", "nghean", "hatinh", "binhphuoc",
+})
+VN_LOCATION_WEAK.update({"brvt", "dbp", "tg", "ld", "bl", "cl", "vl", "tv", "cb", "yb", "tb", "th", "na"})
+
+VN_ORG_TOKENS.update({
+    "wru", "humg", "gtvt", "hcmut", "spkt", "sptn", "unicity", "vms", "vimarut",
+    "sctv", "baominh", "vietinbank", "petrovn", "vienthong", "sinhvien", "cntt",
+    "ktdn", "dh", "thpt", "thcs", "mamnontuoingoc", "nhasach", "honda", "dienlanh",
+    "mobile", "print", "shop", "studio", "sacom", "plaza", "raincoat", "ecopark",
+})
+
+# Suffix an toàn để tách tên viết liền trong part 4: anhtuanetc -> anhtuan, anhhuybg -> anhhuy.
+PART4_SAFE_SUFFIXES = {
+    "etc", "sms", "fc", "cf", "it", "kt", "xd", "qtm", "cntt", "mobile", "print", "shop",
+    "studio", "book", "movie", "movies", "men", "city", "net", "game", "gunny", "zing",
+    "bg", "nd", "qb", "qt", "st", "cm", "ld", "tg", "bl", "brvt", "dbp", "gl", "na",
+    "la", "tv", "vl", "hd", "hy", "vp", "sl", "lc", "pt", "cb", "yb", "tb", "th", "bd",
+}
+
+FOREIGN_NAMES.update({"stephen", "micheal", "michael", "larry", "steven", "boss", "kevin", "jonathan"})
+COUNTRY_CITY_FOREIGN.update({"taiwan", "tw", "softbank"})
+
+# ============================================================
+# DATA MODEL
+# ============================================================
+
+@dataclass(frozen=True)
+class EmailResult:
+    email: str
+    label: str
+    confidence: int
+    vn_score: int
+    foreign_score: int
+    evidence: str
+
+    @property
+    def is_output_vn(self) -> bool:
+        return self.label.startswith("VN_")
+
+    @property
+    def is_review_vn(self) -> bool:
+        return self.label == "REVIEW_POSSIBLE_VN"
+
+# ============================================================
+# NORMALIZE / TOKENIZE
+# ============================================================
+
+def remove_vietnamese_accents(text: str) -> str:
+    text = text.replace("đ", "d").replace("Đ", "D")
+    normalized = unicodedata.normalize("NFD", text)
+    return "".join(ch for ch in normalized if unicodedata.category(ch) != "Mn")
+
+
+def normalize_basic(text: str) -> str:
+    return remove_vietnamese_accents(text.lower()).strip()
+
+
+def normalize_light_leet(text: str) -> str:
+    # Chỉ đổi các số hay gặp trong file mẫu; không đổi quá mạnh để tránh random thành tên Việt.
+    return normalize_basic(text).translate(str.maketrans({"0": "o", "4": "a", "3": "e", "1": "i"}))
+
+
+def normalize_vn_teencode(text: str) -> str:
+    """
+    Normalize thêm cho teencode VN trong file mẫu:
+    nh0k/c0d0n/l0v3/kut3/maiy3u... và vài biến thể số 5->s, 7->t.
+    Chỉ dùng như candidate phụ, không thay thế email gốc.
+    """
+    return normalize_basic(text).translate(str.maketrans({
+        "0": "o", "1": "i", "3": "e", "4": "a", "5": "s", "7": "t", "@": "a"
+    }))
+
+
+def alpha_compact(text: str) -> str:
+    return re.sub(r"[^a-z]", "", text)
+
+
+def digit_compact(text: str) -> str:
+    return re.sub(r"\D", "", text)
+
+
+def split_tokens(local: str, keep_initial: bool = True) -> List[str]:
+    parts = re.split(r"[._\-+\s\d]+", local)
+    min_len = 1 if keep_initial else 2
+    return [p for p in parts if len(p) >= min_len]
+
+
+def unique(seq: Iterable[str]) -> List[str]:
+    return list(dict.fromkeys(seq))
+
+
+def clean_email(email: str) -> str:
+    return email.strip().lower().strip(".,;:)]}>\\\"'")
+
+
+def is_valid_email(email: str) -> bool:
+    if email.count("@") != 1:
+        return False
+    local, domain = email.rsplit("@", 1)
+    if not local or not domain or "." not in domain:
+        return False
+    if len(local) > 100 or len(domain) > 253:
+        return False
+    if ".." in local or ".." in domain:
+        return False
+    if local.startswith(".") or local.endswith("."):
+        return False
+    if domain.startswith(".") or domain.endswith("."):
+        return False
+    return True
+
+
+def is_vn_domain(domain: str) -> bool:
+    return domain in VN_DOMAIN_EXACT or domain.endswith(VN_DOMAIN_SUFFIXES)
+
+
+def is_foreign_domain(domain: str) -> bool:
+    if is_vn_domain(domain):
+        return False
+    return domain.endswith(FOREIGN_TLD_SUFFIXES)
+
+# ============================================================
+# FEATURE DETECTION
+# ============================================================
+
+def strip_common_suffix_noise(text: str) -> str:
+    """Bỏ các đuôi rất hay gặp trong file VN: pro/vip/9x/8x/hn/dn/hp..."""
+    changed = True
+    # Không dùng toàn bộ VN_LOCATION_WEAK ở đây vì các viết tắt như "gl", "hd", "th"
+    # có thể là phần cuối thật của tên viết liền (vd: datminhthongl).
+    safe_location_suffixes = {"hn", "sg", "hcm", "dn", "hp", "qn", "py", "nt", "kg", "ag", "tn", "bmt", "vt"} | PART4_SAFE_SUFFIXES
+    suffixes = sorted(
+        safe_location_suffixes | {"vn", "pro", "vip", "x", "xx", "xxx", "9x", "8x", "7x", "2k", "fc", "bk"},
+        key=len,
+        reverse=True,
+    )
+    while changed:
+        changed = False
+        for suf in suffixes:
+            if text.endswith(suf) and len(text) > len(suf) + 3:
+                text = text[: -len(suf)]
+                changed = True
+                break
+    return text
+
+
+def can_segment_strong_names(text: str, min_parts: int = 2) -> Tuple[bool, List[str]]:
+    """Segment từ trái sang phải bằng âm tiết tên Việt mạnh. Không quét substring bừa."""
+    text = strip_common_suffix_noise(text)
+    if len(text) < 4:
+        return False, []
+
+    syllables = sorted([p for p in VN_SEGMENT_NAME_PARTS if len(p) >= 3], key=len, reverse=True)
+    memo: dict[str, List[str] | None] = {}
+
+    def rec(s: str) -> List[str] | None:
+        if not s:
+            return []
+        if len(s) == 1:  # initial cuối: nguyenvana -> van+a
+            return [s]
+        if s in memo:
+            return memo[s]
+        for syl in syllables:
+            if s.startswith(syl):
+                tail = rec(s[len(syl):])
+                if tail is not None:
+                    memo[s] = [syl] + tail
+                    return memo[s]
+        memo[s] = None
+        return None
+
+    parts = rec(text)
+    if not parts:
+        return False, []
+    strong_count = sum(1 for p in parts if len(p) >= 3)
+    return strong_count >= min_parts, parts
+
+
+def segment_rest_after_surname(rest: str) -> Tuple[str, str, int]:
+    """
+    Tách phần sau họ trong dạng viết liền: nguyenvana, tranthithao, buithaovt.
+    Return: level, reason, count
+    """
+    rest0 = rest
+    rest = strip_common_suffix_noise(rest)
+    if len(rest) < 2:
+        return "none", "", 0
+
+    # Nguyễn Văn A / Trần Thị B / Lê Thị Mỹ.
+    for mid in ("van", "thi"):
+        if rest.startswith(mid) and len(rest) >= len(mid) + 1:
+            tail = strip_common_suffix_noise(rest[len(mid):])
+            if len(tail) == 1:
+                return "certain", f"{mid}+initial", 2
+            ok, parts = can_segment_strong_names(tail, min_parts=1)
+            if tail in VN_ANY_NAME_PARTS or ok:
+                return "certain", f"{mid}+name:{'+'.join(parts) if parts else tail}", 2
+
+    ok, parts = can_segment_strong_names(rest, min_parts=2)
+    if ok:
+        return "certain", "segmented:" + "+".join(parts), len(parts)
+
+    if rest in VN_STRONG_NAME_PARTS and len(rest) >= 3:
+        return "high", f"one_strong_name:{rest}", 1
+
+    # Cho phép tên mạnh + suffix noise: buithaovt -> bui + thao + vt.
+    for p in sorted(VN_STRONG_NAME_PARTS, key=len, reverse=True):
+        if len(p) >= 3 and rest0.startswith(p):
+            suffix = rest0[len(p):]
+            if suffix in VN_LOCATION_WEAK or suffix in {"vn", "pro", "vip", "x", "xx"}:
+                return "high", f"one_strong_name:{p}+suffix:{suffix}", 1
+
+    if rest in VN_WEAK_SYLLABLES:
+        return "review", f"one_weak_name:{rest}", 1
+
+    return "none", "", 0
+
+
+def compact_name_pattern_one(compact: str) -> Tuple[str, str, int]:
+    """Nhận dạng trên một candidate compact, ví dụ token 'nguyenhoang' hoặc full local compact."""
+    compact = strip_common_suffix_noise(compact)
+    if len(compact) < 4:
+        return "none", "", 0
+
+    # surname + rest
+    for surname in sorted(VN_SURNAMES_ALL, key=len, reverse=True):
+        if compact.startswith(surname) and len(compact) >= len(surname) + 2:
+            rest = compact[len(surname):]
+            level, reason, count = segment_rest_after_surname(rest)
+            if level in {"certain", "high"}:
+                # Họ ngắn cần phần tên chắc hơn.
+                if surname in VN_SHORT_SURNAMES and level == "high" and count < 1:
+                    return "review", f"short_surname_review:{surname}+{reason}", count + 1
+                return level, f"compact_name:{surname}+{reason}", count + 1
+            if level == "review":
+                if surname in VN_STRONG_SURNAMES and len(surname) >= 4:
+                    return "review", f"compact_review:{surname}+{reason}", count + 1
+                return "review", f"short_surname_review:{surname}+{reason}", count + 1
+
+    # given + surname đảo ngược: minhnguyen, thaotran, longhuynhduc.
+    for surname in sorted(VN_SURNAMES_ALL, key=len, reverse=True):
+        if compact.endswith(surname) and len(compact) >= len(surname) + 3:
+            before = compact[: -len(surname)]
+            ok, parts = can_segment_strong_names(before, min_parts=1)
+            if before in VN_STRONG_NAME_PARTS or ok:
+                return "high", f"compact_name:{'+'.join(parts) if parts else before}+{surname}", 2
+
+    # Không có họ nhưng có 2 tên Việt mạnh viết liền: thanhcuong, minhduy, lananh.
+    ok, parts = can_segment_strong_names(compact, min_parts=2)
+    if ok:
+        return "high", "compound_vn_names:" + "+".join(parts), len(parts)
+
+    return "none", "", 0
+
+
+def compact_name_pattern(candidates: Sequence[str]) -> Tuple[str, str, int]:
+    priority = {"none": 0, "review": 1, "high": 2, "certain": 3}
+    best = ("none", "", 0)
+    for cand in candidates:
+        if len(cand) < 4:
+            continue
+        level, reason, count = compact_name_pattern_one(cand)
+        if priority[level] > priority[best[0]]:
+            best = (level, reason, count)
+            if level == "certain":
+                break
+    return best
+
+
+def token_name_pattern(tokens: Sequence[str]) -> Tuple[str, str, int]:
+    tokens = [t for t in tokens if t]
+    tokens2 = [t for t in tokens if len(t) >= 2]
+    if not tokens2:
+        return "none", "", 0
+
+    surnames = [t for t in tokens2 if t in VN_SURNAMES_ALL]
+    strong_surnames = [t for t in tokens2 if t in VN_STRONG_SURNAMES]
+    name_parts = [t for t in tokens2 if t in VN_ANY_NAME_PARTS and t not in VN_SURNAMES_ALL]
+    strong_name_parts = [t for t in tokens2 if t in VN_STRONG_NAME_PARTS and t not in VN_SURNAMES_ALL]
+    initials = [t for t in tokens if len(t) == 1 and t.isalpha()]
+
+    if strong_surnames and any(t in {"van", "thi"} for t in tokens2) and (strong_name_parts or initials):
+        return "certain", "token_name:surname+van_thi+name", len(set(surnames + name_parts)) + min(len(initials), 1)
+
+    if strong_surnames and len(set(strong_name_parts)) >= 2:
+        return "certain", "token_name:strong_surname+two_strong_names", len(set(surnames + strong_name_parts))
+
+    if strong_surnames and strong_name_parts:
+        return "high", "token_name:strong_surname+strong_name", len(set(surnames + strong_name_parts))
+
+    if surnames and any(t in {"van", "thi"} for t in tokens2) and (name_parts or initials):
+        return "high", "token_name:surname+van_thi+name", len(set(surnames + name_parts)) + min(len(initials), 1)
+
+    if surnames and len(set(strong_name_parts)) >= 1:
+        return "high", "token_name:surname+strong_name", len(set(surnames + strong_name_parts))
+
+    if tokens2[-1] in VN_SURNAMES_ALL and any(t in VN_STRONG_NAME_PARTS for t in tokens2[:-1]):
+        return "high", "token_name:name+surname", 2
+
+    # Không họ nhưng 2 tên Việt mạnh tách token: thanh.cuong, minh.duy.
+    if len(set(strong_name_parts)) >= 2:
+        return "high", "token_name:two_strong_vn_names", len(set(strong_name_parts))
+
+    if surnames and name_parts:
+        return "review", "token_name:surname+weak_name", len(set(surnames + name_parts))
+
+    if surnames:
+        return "review", "token_name:surname_only", len(set(surnames))
+
+    return "none", "", 0
+
+
+def explicit_vn_marker(tokens: Sequence[str], compact: str) -> Tuple[bool, str]:
+    for marker in VN_EXPLICIT_MARKERS:
+        mc = alpha_compact(marker)
+        if mc and mc in compact:
+            return True, f"explicit_marker:{marker}"
+    for token in tokens:
+        if token in VN_EXPLICIT_TOKENS:
+            return True, f"explicit_token:{token}"
+    if compact.startswith("viet") and not compact.startswith("soviet"):
+        return True, "explicit_prefix:viet"
+    if compact.endswith("vn") and len(compact) >= 5:
+        return True, "explicit_suffix:vn"
+    return False, ""
+
+
+def location_signal(tokens: Sequence[str], compact: str) -> Tuple[str, str]:
+    for loc in VN_LOCATION_STRONG:
+        lc = alpha_compact(loc)
+        if lc and (lc in compact or loc in tokens):
+            return "strong", f"location:{loc}"
+    weak = [t for t in tokens if t in VN_LOCATION_WEAK]
+    if weak:
+        return "weak", "weak_location:" + "+".join(weak[:3])
+    return "", ""
+
+
+def style_signal(tokens: Sequence[str], compact: str) -> Tuple[str, str]:
+    strong_hits = []
+    for style in sorted(VN_STYLE_STRONG, key=len, reverse=True):
+        sc = alpha_compact(style)
+        if sc and sc in compact:
+            strong_hits.append(style)
+    if strong_hits:
+        # 'pe'/'heo' ngắn chỉ coi là yếu nếu đứng một mình.
+        strong_real = [x for x in strong_hits if len(alpha_compact(x)) >= 4]
+        if strong_real:
+            return "strong", "style:" + "+".join(strong_real[:4])
+        return "weak", "style_weak:" + "+".join(strong_hits[:4])
+
+    weak_hits = [t for t in tokens if t in VN_STYLE_WEAK]
+    if weak_hits:
+        return "weak", "style_weak:" + "+".join(weak_hits[:4])
+    return "", ""
+
+
+def org_signal(tokens: Sequence[str], compact: str) -> Tuple[bool, str]:
+    hits = [t for t in tokens if t in VN_ORG_TOKENS]
+    if hits:
+        return True, "vn_org:" + "+".join(hits[:3])
+    for org in VN_ORG_TOKENS:
+        if len(org) >= 4 and org in compact:
+            return True, f"vn_org:{org}"
+    return False, ""
+
+
+def phone_signal(local: str) -> Tuple[str, str]:
+    digits = digit_compact(local)
+    if not digits:
+        return "", ""
+    # Số di động VN hiện tại 10 số: 03/05/07/08/09. Đầu cũ 11 số: 012-019.
+    if re.fullmatch(r"0(3|5|7|8|9)\d{8}", digits):
+        return "strong", "vn_phone_10_digit"
+    if re.fullmatch(r"01[2-9]\d{8}", digits):
+        return "strong", "vn_phone_old_11_digit"
+    if re.fullmatch(r"84(3|5|7|8|9)\d{8}", digits):
+        return "strong", "vn_phone_84_prefix"
+    # Nếu local có cả chữ và số điện thoại VN ở cuối/đầu.
+    if re.search(r"0(3|5|7|8|9)\d{8}", digits) or re.search(r"01[2-9]\d{8}", digits):
+        return "weak", "vn_phone_inside_local"
+    return "", ""
+
+
+def foreign_signals(tokens: Sequence[str], compact: str, domain: str) -> Tuple[int, List[str]]:
+    score = 0
+    reasons: List[str] = []
+
+    if is_foreign_domain(domain):
+        score += 80
+        reasons.append("foreign_tld")
+
+    exact_foreign = [t for t in tokens if t in FOREIGN_NAMES and t not in AMBIGUOUS_FOREIGN_ASIAN]
+    ambiguous = [t for t in tokens if t in AMBIGUOUS_FOREIGN_ASIAN]
+    if exact_foreign:
+        score += 28 * len(exact_foreign)
+        reasons.append("foreign_name:" + "+".join(exact_foreign[:4]))
+    if ambiguous and not any(t in VN_SURNAMES_ALL for t in tokens):
+        score += 10 * len(ambiguous)
+        reasons.append("ambiguous_asian_name:" + "+".join(ambiguous[:4]))
+
+    places = [t for t in tokens if t in COUNTRY_CITY_FOREIGN]
+    if places:
+        score += 25 * len(places)
+        reasons.append("foreign_country_city:" + "+".join(places[:4]))
+
+    generic = [t for t in tokens if t in GENERIC_OR_BUSINESS_WORDS]
+    if generic:
+        score += 16 * len(generic)
+        reasons.append("generic_word:" + "+".join(generic[:4]))
+
+    english = [t for t in tokens if t in ENGLISH_COMMON_WORDS]
+    if english:
+        score += 6 * len(english)
+        reasons.append("english_word:" + "+".join(english[:4]))
+
+    has_vn_prefix = any(compact.startswith(s) for s in VN_SURNAMES_ALL if len(s) >= 3)
+    if not has_vn_prefix:
+        for name in FOREIGN_NAMES:
+            if len(name) >= 4 and (compact == name or compact.startswith(name) or compact.endswith(name)):
+                score += 18
+                reasons.append(f"compact_foreign_name:{name}")
+                break
+
+    return score, reasons
+
+# ============================================================
+# CLASSIFIER
+# ============================================================
+
+def classify_email(email: str) -> EmailResult:
+    email = clean_email(email)
+    if not is_valid_email(email):
+        return EmailResult(email, "INVALID", 0, 0, 0, "invalid_email")
+
+    local, domain = email.rsplit("@", 1)
+    domain = domain.strip().lower().strip(".")
+
+    basic_local = normalize_basic(local)
+    leet_local = normalize_light_leet(local)
+    teen_local = normalize_vn_teencode(local)
+    tokens = unique(
+        split_tokens(basic_local, True)
+        + split_tokens(leet_local, True)
+        + split_tokens(teen_local, True)
+    )
+    tokens2 = [t for t in tokens if len(t) >= 2]
+    compact = alpha_compact(basic_local)
+    compact_leet = alpha_compact(leet_local)
+    compact_teen = alpha_compact(teen_local)
+    compact_signal = compact + compact_leet + compact_teen
+
+    # Candidate compact gồm full local và từng token để bắt nguyenhoang.pro8x -> nguyenhoang.
+    compact_candidates = unique(
+        [compact_teen, compact_leet, compact]
+        + [alpha_compact(t) for t in split_tokens(teen_local, False)]
+        + [alpha_compact(t) for t in split_tokens(leet_local, False)]
+        + [alpha_compact(t) for t in split_tokens(basic_local, False)]
+    )
+
+    evidence: List[str] = []
+    vn_score = 0
+    foreign_score, foreign_reasons = foreign_signals(tokens2, compact_leet, domain)
+
+    explicit, explicit_reason = explicit_vn_marker(tokens2, compact_leet)
+    if not explicit:
+        explicit, explicit_reason = explicit_vn_marker(tokens2, compact_teen)
+    loc_level, loc_reason = location_signal(tokens2, compact_signal)
+    style_level, style_reason = style_signal(tokens2, compact_signal)
+    org, org_reason = org_signal(tokens2, compact_signal)
+    phone_level, phone_reason = phone_signal(local)
+    token_level, token_reason, token_count = token_name_pattern(tokens)
+    compact_level, compact_reason, compact_count = compact_name_pattern(compact_candidates)
+
+    if explicit:
+        vn_score += 90
+        evidence.append(explicit_reason)
+    if loc_level == "strong":
+        vn_score += 50
+        evidence.append(loc_reason)
+    elif loc_level == "weak":
+        vn_score += 12
+        evidence.append(loc_reason)
+    if style_level == "strong":
+        vn_score += 42
+        evidence.append(style_reason)
+    elif style_level == "weak":
+        vn_score += 10
+        evidence.append(style_reason)
+    if org:
+        vn_score += 35
+        evidence.append(org_reason)
+    if phone_level == "strong":
+        vn_score += 60
+        evidence.append(phone_reason)
+    elif phone_level == "weak":
+        vn_score += 25
+        evidence.append(phone_reason)
+
+    level_score = {"none": 0, "review": 30, "high": 72, "certain": 95}
+    if token_level != "none":
+        vn_score += level_score[token_level]
+        evidence.append(token_reason)
+    if compact_level != "none":
+        vn_score += level_score[compact_level]
+        evidence.append(compact_reason)
+
+    has_name_output = token_level in {"high", "certain"} or compact_level in {"high", "certain"}
+    has_name_review = token_level == "review" or compact_level == "review"
+
+    # 1) Domain Việt Nam: output chính, trừ khi dấu hiệu nước ngoài quá rõ và không có thêm bằng chứng Việt.
+    if is_vn_domain(domain):
+        vn_score += 100
+        evidence.insert(0, "vn_domain")
+        if foreign_score >= 70 and not (explicit or has_name_output or loc_level == "strong" or style_level == "strong"):
+            return EmailResult(email, "REVIEW_POSSIBLE_VN", 70, vn_score, foreign_score, ";".join(evidence + foreign_reasons))
+        return EmailResult(email, "VN_CERTAIN_DOMAIN", 99, vn_score, foreign_score, ";".join(evidence + foreign_reasons))
+
+    # 2) Domain nước ngoài rõ: không đưa output, trừ khi dấu hiệu Việt rất mạnh -> review.
+    if is_foreign_domain(domain):
+        if (explicit or has_name_output or loc_level == "strong") and foreign_score < 110:
+            return EmailResult(email, "REVIEW_POSSIBLE_VN", 62, vn_score, foreign_score, ";".join(evidence + foreign_reasons + ["foreign_domain"]))
+        return EmailResult(email, "FOREIGN_LIKELY", 92, vn_score, foreign_score, ";".join(evidence + foreign_reasons) or "foreign_domain")
+
+    # 3) Generic/business trên domain trung tính: chỉ output nếu có bằng chứng Việt mạnh.
+    has_generic = any(t in GENERIC_OR_BUSINESS_WORDS for t in tokens2)
+    if has_generic and not (explicit or has_name_output or loc_level == "strong" or org):
+        return EmailResult(email, "NOT_PERSONAL_OR_UNKNOWN", 76, vn_score, foreign_score, ";".join(evidence + foreign_reasons) or "generic_business_token")
+
+    # 4) Chặn nước ngoài rõ nếu không có bằng chứng Việt mạnh.
+    if foreign_score >= 45 and not (explicit or has_name_output or loc_level == "strong" or phone_level == "strong"):
+        return EmailResult(email, "FOREIGN_LIKELY", 88, vn_score, foreign_score, ";".join(evidence + foreign_reasons))
+
+    # 5) Output chính cho domain trung tính/quốc tế phổ biến.
+    if explicit and foreign_score < 45:
+        return EmailResult(email, "VN_CERTAIN_MARKER", 97, vn_score, foreign_score, ";".join(evidence + foreign_reasons))
+
+    if token_level == "certain" or compact_level == "certain":
+        if foreign_score < 55:
+            return EmailResult(email, "VN_CERTAIN_NAME", 96, vn_score, foreign_score, ";".join(evidence + foreign_reasons))
+
+    if has_name_output and foreign_score < 45:
+        return EmailResult(email, "VN_HIGH_CONFIDENCE_NAME", 91, vn_score, foreign_score, ";".join(evidence + foreign_reasons))
+
+    # Part 3 có nhiều local dạng tên Việt + số/năm/tỉnh: tuan123, ngocvvui, thanh@yahoo...
+    # Chỉ nâng khi token là tên Việt mạnh và có thêm số/đuôi tỉnh/teencode phụ, tránh bắt nhầm một từ tiếng Anh.
+    single_strong_names = [t for t in tokens2 if t in VN_STRONG_NAME_PARTS and len(t) >= 4]
+    has_digit = bool(digit_compact(local))
+    has_weak_location = loc_level == "weak"
+    if single_strong_names and foreign_score < 25:
+        if has_digit or has_weak_location or style_level == "strong" or domain in {"yahoo.com", "yahoo.com.vn", "zing.vn", "ymail.com"}:
+            return EmailResult(email, "VN_HIGH_CONFIDENCE_SINGLE_NAME", 80, vn_score, foreign_score, ";".join(evidence + foreign_reasons + ["single_vn_name_plus_context"]))
+
+    # Phone local trong file VN rất hay gặp: 09/03/07/08/05 hoặc 012-019.
+    if phone_level == "strong" and foreign_score < 25:
+        return EmailResult(email, "VN_HIGH_CONFIDENCE_PHONE", 88, vn_score, foreign_score, ";".join(evidence + foreign_reasons))
+
+    if loc_level == "strong" and foreign_score < 25:
+        return EmailResult(email, "VN_HIGH_CONFIDENCE_LOCATION", 87, vn_score, foreign_score, ";".join(evidence + foreign_reasons))
+
+    # Style mạnh của VN được output nếu kèm thêm dấu hiệu phụ: tên review/location/phone/org/vn suffix.
+    if style_level == "strong" and foreign_score < 25:
+        if has_name_review or loc_level in {"strong", "weak"} or phone_level or org or explicit:
+            return EmailResult(email, "VN_HIGH_CONFIDENCE_STYLE", 84, vn_score, foreign_score, ";".join(evidence + foreign_reasons))
+        # Một số phrase rất Việt có thể output ngay.
+        very_vn_phrases = (
+            "tinhyeu", "maimaiyeu", "maiyeuanh", "maiyeuem", "anhyeuem", "emyeuanh",
+            "chiyeuanh", "chiyeuem", "yeuchiminhem", "codon", "chungtinh", "thuychung",
+            "deptrai", "depzai", "dangyeu", "dangiu", "dethuong", "zethuong",
+            "nhockute", "nhoxkute", "traitim", "trondoi", "benem", "nhoem", "nhoanh",
+            "satthu", "thienthan", "tieuthu", "congtu", "congchua", "caube", "cobe",
+            "noibuon", "nuocmat", "giacmo", "kiepngheo", "timnguoiyeu", "timvo", "timbx",
+            "anhchang", "emlatatca", "batdaucuocchoi", "mavalatoi", "caubevuotthoigian",
+            "cobeyeudoi", "sinhvienngheo", "solotinhyeu", "trondoibenemmaimai",
+            "lycaphesuada", "congtubotanchoi", "mongemquayve", "khongyeu",
+            "khoclamgi", "lamsaoquenduocem", "muadongkhongcoem", "satthutinhyeu",
+        )
+        if any(x in compact_signal for x in very_vn_phrases):
+            return EmailResult(email, "VN_HIGH_CONFIDENCE_STYLE", 82, vn_score, foreign_score, ";".join(evidence + foreign_reasons))
+
+    if org and (has_name_review or loc_level or style_level or phone_level) and foreign_score < 25:
+        return EmailResult(email, "VN_HIGH_CONFIDENCE_ORG", 83, vn_score, foreign_score, ";".join(evidence + foreign_reasons))
+
+    # Part 4: Facebook-style profile email họ.tên.số@facebook.com.
+    # Chỉ output khi local có token tên Việt rõ, không output ID số thuần như 10000...@facebook.com.
+    if domain in {"facebook.com", "facebook.vn"}:
+        local_has_letters = bool(re.search(r"[a-zA-Z]", local))
+        local_is_numeric_id = bool(re.fullmatch(r"\d{8,20}", local))
+        if local_has_letters and not local_is_numeric_id and foreign_score < 45:
+            if token_level in {"high", "certain"} or compact_level in {"high", "certain"}:
+                return EmailResult(email, "VN_HIGH_CONFIDENCE_FACEBOOK_NAME", 86, vn_score, foreign_score, ";".join(evidence + foreign_reasons + ["facebook_name_style"]))
+            if style_level == "strong" or loc_level in {"strong", "weak"} or has_name_review:
+                return EmailResult(email, "VN_HIGH_CONFIDENCE_FACEBOOK_STYLE", 80, vn_score, foreign_score, ";".join(evidence + foreign_reasons + ["facebook_profile_style"]))
+
+    # 6) Review: có dấu hiệu Việt nhưng chưa đủ output.
+    if (has_name_review or style_level or loc_level or phone_level or org) and foreign_score < 45:
+        return EmailResult(email, "REVIEW_POSSIBLE_VN", 64, vn_score, foreign_score, ";".join(evidence + foreign_reasons))
+
+    if foreign_score >= 25:
+        return EmailResult(email, "FOREIGN_LIKELY", 80, vn_score, foreign_score, ";".join(evidence + foreign_reasons))
+
+    return EmailResult(email, "UNKNOWN", 50, vn_score, foreign_score, ";".join(evidence + foreign_reasons) or "no_strong_vn_evidence")
+
+# ============================================================
+# FILE IO
+# ============================================================
+
+def extract_emails_from_text(text: str) -> Set[str]:
+    emails: Set[str] = set()
+    for raw in EMAIL_RE.findall(text):
+        email = clean_email(raw)
+        if is_valid_email(email):
+            emails.add(email)
+    return emails
+
+
+def read_text_with_fallback(path: Path) -> str:
+    encodings = ("utf-8-sig", "utf-8", "cp1258", "cp1252", "latin-1")
+    for enc in encodings:
+        try:
+            return path.read_text(encoding=enc, errors="strict")
+        except UnicodeDecodeError:
+            continue
+    return path.read_text(encoding="utf-8", errors="replace")
+
+
+def extract_emails_stream(path: Path) -> Set[str]:
+    emails: Set[str] = set()
+    encodings = ("utf-8-sig", "utf-8", "cp1258", "cp1252", "latin-1")
+    for enc in encodings:
+        try:
+            with path.open("r", encoding=enc, errors="strict") as f:
+                for line in f:
+                    emails.update(extract_emails_from_text(line))
+            return emails
+        except UnicodeDecodeError:
+            emails.clear()
+            continue
+    with path.open("r", encoding="utf-8", errors="replace") as f:
+        for line in f:
+            emails.update(extract_emails_from_text(line))
+    return emails
+
+
+def classify_many(emails: Iterable[str]) -> List[EmailResult]:
+    cleaned = sorted(set(clean_email(e) for e in emails if clean_email(e)))
+    return [classify_email(e) for e in cleaned]
+
+
+def save_results(output_dir: Path, results: List[EmailResult]) -> Path:
+    """Chỉ lưu đúng 1 file output duy nhất: vnoutput.txt."""
+    output_dir.mkdir(parents=True, exist_ok=True)
+    output_path = output_dir / "vnoutput.txt"
+
+    vn_emails = sorted({row.email for row in results if row.is_output_vn})
+    with output_path.open("w", encoding="utf-8", newline="") as f:
+        for email in vn_emails:
+            f.write(email + "\n")
+
+    return output_path
+
+# ============================================================
+# GUI
+# ============================================================
+
+class VietnameseEmailFilterGUI:
+    def __init__(self, root: tk.Tk):
+        self.root = root
+        self.root.title("Vietnamese Email Filter - VNOUTPUT PART4+")
+        self.root.geometry("850x660")
+        self.root.minsize(850, 660)
+        self.root.configure(bg="#f0f0f0")
+
+        self.input_file: Path | None = None
+        self.output_dir: Path | None = None
+        self._build_ui()
+
+    def _build_ui(self) -> None:
+        title_frame = tk.Frame(self.root, bg="#1f2d3d", height=108)
+        title_frame.pack(fill=tk.X)
+        title_frame.pack_propagate(False)
+
+        tk.Label(
+            title_frame,
+            text="🔍 Vietnamese Email Filter - VNOUTPUT PART4+",
+            font=("Arial", 18, "bold"),
+            bg="#1f2d3d",
+            fg="white",
+        ).pack(pady=(16, 2))
+
+        tk.Label(
+            title_frame,
+            text="Nâng cấp theo file mẫu VN: họ tên viết liền, teencode Việt, địa danh, số điện thoại VN, domain VN/typo. Output chỉ có email.",
+            font=("Arial", 10),
+            bg="#1f2d3d",
+            fg="#ecf0f1",
+        ).pack()
+
+        content = tk.Frame(self.root, bg="#f0f0f0")
+        content.pack(fill=tk.BOTH, expand=True, padx=22, pady=16)
+
+        self.input_label = self._file_section(
+            content,
+            title="1. Chọn file input",
+            placeholder="Chưa chọn file...",
+            button_text="📂 Chọn File TXT/CSV/LOG",
+            button_color="#2980b9",
+            command=self.choose_input_file,
+        )
+
+        self.output_label = self._file_section(
+            content,
+            title="2. Chọn thư mục lưu output",
+            placeholder="Chưa chọn thư mục...",
+            button_text="💾 Chọn Thư Mục Lưu",
+            button_color="#27ae60",
+            command=self.choose_output_dir,
+        )
+
+        info = (
+            "Logic bản PART4+:\n"
+            "• Domain Việt/nhà cung cấp Việt hoặc typo VN như yahoo.com.vn, zing.vn, go.vn, yhoo.com.vn được nhận mạnh.\n"
+            "• Gmail/Yahoo/Outlook được nhận khi local-part có họ+tên Việt rõ, kể cả viết liền: nguyenhoang, trananhquoc, buithaovt.\n"
+            "• Bắt thêm local là số điện thoại Việt: 09/03/07/08/05 hoặc đầu cũ 012-019.\n"
+            "• Bắt teencode Việt part 3/4: maimaiyeu/maiyeuanh, traitim, trondoi, benem, codon/c0d0n, nh0k/nhox, deptrai/depzai...\n"
+            "• Bỏ kiểu quét âm tiết rời quá rộng để tránh bắt nhầm mail nước ngoài/random.\n"
+            "• Chỉ tạo 1 file duy nhất: vnoutput.txt, không tạo review/report/unknown."
+        )
+        tk.Label(
+            content,
+            text=info,
+            font=("Arial", 9),
+            bg="#f0f0f0",
+            fg="#444444",
+            justify=tk.LEFT,
+            anchor=tk.W,
+        ).pack(fill=tk.X, pady=(0, 14))
+
+        self.start_btn = tk.Button(
+            content,
+            text="🚀 Bắt Đầu Lọc VNOUTPUT",
+            command=self.start_processing,
+            font=("Arial", 12, "bold"),
+            bg="#c0392b",
+            fg="white",
+            padx=20,
+            pady=14,
+            relief=tk.FLAT,
+            cursor="hand2",
+            state=tk.DISABLED,
+        )
+        self.start_btn.pack(fill=tk.X, pady=(2, 8))
+
+        self.progress = ttk.Progressbar(content, mode="determinate", maximum=100)
+        self.progress.pack(fill=tk.X, pady=(8, 4))
+        self.progress.pack_forget()
+
+        self.status_label = tk.Label(
+            content,
+            text="",
+            font=("Arial", 9),
+            bg="#f0f0f0",
+            fg="#7f8c8d",
+            justify=tk.LEFT,
+            anchor=tk.W,
+        )
+        self.status_label.pack(fill=tk.X, pady=(6, 2))
+        self.status_label.pack_forget()
+
+    def _file_section(self, parent, title, placeholder, button_text, button_color, command):
+        tk.Label(
+            parent,
+            text=title,
+            font=("Arial", 12, "bold"),
+            bg="#f0f0f0",
+            fg="#2c3e50",
+        ).pack(anchor=tk.W, pady=(0, 8))
+
+        frame = tk.Frame(parent, bg="white", relief=tk.SUNKEN, bd=1)
+        frame.pack(fill=tk.X, pady=(0, 8))
+
+        label = tk.Label(
+            frame,
+            text=placeholder,
+            font=("Arial", 10),
+            bg="white",
+            fg="#7f8c8d",
+            anchor=tk.W,
+        )
+        label.pack(fill=tk.X, padx=10, pady=10)
+
+        btn = tk.Button(
+            parent,
+            text=button_text,
+            command=command,
+            font=("Arial", 10, "bold"),
+            bg=button_color,
+            fg="white",
+            padx=20,
+            pady=9,
+            relief=tk.FLAT,
+            cursor="hand2",
+        )
+        btn.pack(fill=tk.X, pady=(0, 16))
+
+        if "input" in title.lower():
+            self.input_btn = btn
+        else:
+            self.output_btn = btn
+        return label
+
+    def choose_input_file(self) -> None:
+        file_name = filedialog.askopenfilename(
+            title="Chọn file input",
+            filetypes=[
+                ("Text-like files", "*.txt *.csv *.log"),
+                ("Text files", "*.txt"),
+                ("CSV files", "*.csv"),
+                ("All files", "*.*"),
+            ],
+        )
+        if file_name:
+            self.input_file = Path(file_name)
+            self.input_label.config(text=f"✅ {self.input_file}", fg="#27ae60")
+            self.check_ready()
+
+    def choose_output_dir(self) -> None:
+        folder_name = filedialog.askdirectory(title="Chọn thư mục lưu output")
+        if folder_name:
+            self.output_dir = Path(folder_name)
+            self.output_label.config(text=f"✅ {self.output_dir}", fg="#27ae60")
+            self.check_ready()
+
+    def check_ready(self) -> None:
+        self.start_btn.config(state=tk.NORMAL if self.input_file and self.output_dir else tk.DISABLED)
+
+    def set_controls_state(self, state: str) -> None:
+        self.start_btn.config(state=state)
+        self.input_btn.config(state=state)
+        self.output_btn.config(state=state)
+
+    def start_processing(self) -> None:
+        if not self.input_file or not self.output_dir:
+            messagebox.showwarning("Thiếu thông tin", "Bạn cần chọn file input và thư mục output.")
+            return
+
+        self.set_controls_state(tk.DISABLED)
+        self.progress["value"] = 0
+        self.progress.pack(fill=tk.X, pady=(8, 4))
+        self.status_label.config(text="⏳ Đang đọc file và trích email...", fg="#e67e22")
+        self.status_label.pack(fill=tk.X, pady=(6, 2))
+
+        threading.Thread(target=self.process_file, daemon=True).start()
+
+    def process_file(self) -> None:
+        try:
+            assert self.input_file is not None
+            assert self.output_dir is not None
+
+            emails = extract_emails_stream(self.input_file)
+            if not emails:
+                self.root.after(0, lambda: self.finish_error("❌ Không tìm thấy email hợp lệ trong file."))
+                return
+
+            results: List[EmailResult] = []
+            total = len(emails)
+            for idx, email in enumerate(sorted(emails), start=1):
+                results.append(classify_email(email))
+                if idx % 100 == 0 or idx == total:
+                    progress = int(idx / total * 100)
+                    self.root.after(0, lambda p=progress, i=idx, t=total: self.update_progress(p, i, t))
+
+            output_count = sum(1 for r in results if r.is_output_vn)
+            skipped_count = total - output_count
+
+            output_path = save_results(self.output_dir, results)
+
+            msg = (
+                "✅ Xử lý xong!\n\n"
+                f"Tổng email tìm thấy: {total}\n"
+                f"Email VN đã xuất: {output_count}\n"
+                f"Email không xuất vì chưa đủ chắc/không phải VN: {skipped_count}\n\n"
+                f"📄 File duy nhất: {output_path}"
+            )
+            self.root.after(0, lambda: self.finish_success(msg))
+
+        except Exception as exc:
+            self.root.after(0, lambda e=exc: self.finish_error(f"❌ Lỗi: {e}"))
+
+    def update_progress(self, progress: int, processed: int, total: int) -> None:
+        self.progress["value"] = progress
+        self.status_label.config(text=f"⏳ Đang phân loại... {processed}/{total} email ({progress}%)")
+
+    def finish_success(self, msg: str) -> None:
+        self.progress.pack_forget()
+        self.status_label.pack_forget()
+        self.set_controls_state(tk.NORMAL)
+        messagebox.showinfo("Thành công", msg)
+
+    def finish_error(self, msg: str) -> None:
+        self.progress.pack_forget()
+        self.status_label.pack_forget()
+        self.set_controls_state(tk.NORMAL)
+        messagebox.showerror("Lỗi", msg)
+
+
+def main() -> None:
+    root = tk.Tk()
+    VietnameseEmailFilterGUI(root)
+    root.mainloop()
+
+
+if __name__ == "__main__":
+    main()
