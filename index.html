@@ -1,0 +1,264 @@
+<!DOCTYPE html>
+<html lang="vi">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>🔑 Password Variant Tool PRO by @teddyvrp</title>
+  <link rel="stylesheet" href="css/style.css">
+</head>
+<body>
+  <!-- Navbar -->
+  <nav class="navbar">
+    <div class="navbar-container">
+      <div class="navbar-logo">
+        <span class="logo-icon">🔐</span>
+        <span class="logo-text">PasswordX</span>
+        <span class="version-badge">PRO v2.0</span>
+      </div>
+      <div class="navbar-info">
+        <span class="by-credit">by @teddyvrp</span>
+      </div>
+    </div>
+  </nav>
+
+  <!-- Hero Section -->
+  <section class="hero">
+    <div class="hero-background"></div>
+    <div class="hero-content">
+      <h1 class="hero-title">🔑 Password Variant Tool</h1>
+      <p class="hero-subtitle">Generate unlimited password variants in seconds.<br>Fast, Easy & Powerful.</p>
+      <div class="hero-features">
+        <div class="feature-badge">⚡ Multi-Stage Mutation</div>
+        <div class="feature-badge">🎯 Advanced Rules</div>
+        <div class="feature-badge">📦 Custom Patterns</div>
+      </div>
+    </div>
+  </section>
+
+  <!-- Main Container -->
+  <div class="main-container">
+    
+    <!-- Left Sidebar -->
+    <aside class="sidebar">
+      <div class="sidebar-section">
+        <h3 class="section-title">📁 Upload File</h3>
+        <div class="file-upload" id="uploadArea">
+          <div class="upload-icon">📤</div>
+          <p class="upload-text">Drag & drop file here</p>
+          <p class="upload-hint">or click to browse</p>
+          <input type="file" id="fileInput" accept=".txt,.csv" />
+        </div>
+        <div class="file-stats" id="fileStats" style="display: none;">
+          <div class="stat-item">
+            <span class="stat-label">File Size</span>
+            <span class="stat-value" id="fileSize">0 KB</span>
+          </div>
+          <div class="stat-item">
+            <span class="stat-label">Records</span>
+            <span class="stat-value" id="recordCount">0</span>
+          </div>
+        </div>
+      </div>
+
+      <div class="sidebar-section">
+        <h3 class="section-title">⚙️ Settings</h3>
+        <div class="settings-form">
+          <div class="form-group">
+            <label>Mutation Depth</label>
+            <input type="number" id="mutationDepth" min="1" max="4" value="2">
+            <small>1-4 (higher = more variants)</small>
+          </div>
+          <div class="form-group">
+            <label>Max Results</label>
+            <input type="number" id="maxResults" min="1000" max="1000000" value="100000">
+            <small>Limit variants output</small>
+          </div>
+          <div class="form-group">
+            <label>Export Format</label>
+            <select id="exportFormat">
+              <option value="txt">TXT (username:password)</option>
+              <option value="csv">CSV</option>
+              <option value="json">JSON</option>
+            </select>
+          </div>
+        </div>
+      </div>
+    </aside>
+
+    <!-- Main Content -->
+    <main class="content">
+      
+      <!-- Tabs -->
+      <div class="tabs-container">
+        <div class="tabs-header">
+          <button class="tab-button active" data-tab="basic">
+            <span class="tab-icon">⚡</span>
+            <span class="tab-label">Basic Rules</span>
+          </button>
+          <button class="tab-button" data-tab="advanced">
+            <span class="tab-icon">🔧</span>
+            <span class="tab-label">Advanced</span>
+          </button>
+          <button class="tab-button" data-tab="custom">
+            <span class="tab-icon">✏️</span>
+            <span class="tab-label">Custom</span>
+          </button>
+        </div>
+
+        <!-- Basic Tab -->
+        <div class="tab-content active" id="basic">
+          <div class="tab-search">
+            <input type="text" placeholder="🔍 Search rules..." id="searchBasic" onkeyup="filterRules('basic')">
+          </div>
+          <div class="rules-grid" id="basicRulesContainer"></div>
+          <div class="tab-actions">
+            <button class="btn btn-primary" id="generateBasicBtn" onclick="generateVariants('basic')" disabled>
+              ⚡ Generate Variants (Basic)
+            </button>
+            <button class="btn btn-secondary" id="clearBtn" onclick="clearAll()" disabled>
+              🗑️ Clear All
+            </button>
+          </div>
+        </div>
+
+        <!-- Advanced Tab -->
+        <div class="tab-content" id="advanced">
+          <div class="tab-search">
+            <input type="text" placeholder="🔍 Search rules..." id="searchAdvanced" onkeyup="filterRules('advanced')">
+          </div>
+          <div class="rules-grid" id="advancedRulesContainer"></div>
+          <div class="tab-actions">
+            <button class="btn btn-primary" id="generateAdvBtn" onclick="generateVariants('advanced')" disabled>
+              🔧 Generate Variants (Advanced)
+            </button>
+          </div>
+        </div>
+
+        <!-- Custom Tab -->
+        <div class="tab-content" id="custom">
+          <div class="custom-form">
+            <div class="form-group">
+              <label>Custom Suffixes</label>
+              <textarea id="customSuffixes" placeholder="_2024&#10;.pro&#10;@vip&#10;-love&#10;123"></textarea>
+            </div>
+            <div class="form-group">
+              <label>Custom Prefixes</label>
+              <textarea id="customPrefixes" placeholder="vn_&#10;admin_&#10;test_"></textarea>
+            </div>
+            <div class="form-group">
+              <label>Custom Separators</label>
+              <textarea id="customSeparators" placeholder="_&#10;-&#10;.&#10;#"></textarea>
+            </div>
+          </div>
+          <div class="tab-actions">
+            <button class="btn btn-primary" onclick="generateVariants('custom')">
+              ✏️ Generate from Custom
+            </button>
+          </div>
+        </div>
+      </div>
+
+      <!-- Results Section -->
+      <div class="results-section">
+        <div class="results-header">
+          <h2>📋 Results</h2>
+          <div class="results-stats">
+            <div class="stat-badge">
+              <span class="stat-label">Preview</span>
+              <span class="stat-value" id="count">0</span>
+            </div>
+            <div class="stat-badge">
+              <span class="stat-label">Total</span>
+              <span class="stat-value" id="totalCount">0</span>
+            </div>
+            <div class="stat-badge">
+              <span class="stat-label">Ratio</span>
+              <span class="stat-value" id="ratioCount">0x</span>
+            </div>
+          </div>
+        </div>
+
+        <!-- Progress Bar -->
+        <div class="progress-section" id="progressSection" style="display: none;">
+          <div class="progress-info">
+            <span>Processing...</span>
+            <span id="progressPercent">0%</span>
+          </div>
+          <div class="progress-bar">
+            <div class="progress-fill" id="progressBar"></div>
+          </div>
+        </div>
+
+        <!-- Output Box -->
+        <div class="output-box" id="output">No data. Upload a file to begin.</div>
+
+        <!-- Action Buttons -->
+        <div class="results-actions">
+          <button class="btn btn-primary" id="downloadBtn" onclick="downloadResults()" disabled>
+            ⬇️ Download Results
+          </button>
+          <button class="btn btn-secondary" id="copyBtn" onclick="copyToClipboard()" disabled>
+            📋 Copy to Clipboard
+          </button>
+          <button class="btn btn-secondary" id="stopBtn" onclick="stopProcessing()" style="display: none;">
+            ⏹️ Stop
+          </button>
+        </div>
+      </div>
+
+    </main>
+
+    <!-- Right Sidebar -->
+    <aside class="right-sidebar">
+      <div class="sidebar-card">
+        <h3 class="card-title">📊 Statistics</h3>
+        <div class="stats-list">
+          <div class="stat-row">
+            <span class="stat-name">Input Files</span>
+            <span class="stat-num" id="statsFile">0</span>
+          </div>
+          <div class="stat-row">
+            <span class="stat-name">Generated</span>
+            <span class="stat-num" id="statsVariants">0</span>
+          </div>
+          <div class="stat-row">
+            <span class="stat-name">Expansion</span>
+            <span class="stat-num" id="statsRatio">0x</span>
+          </div>
+        </div>
+      </div>
+
+      <div class="sidebar-card">
+        <h3 class="card-title">💡 Tips</h3>
+        <ul class="tips-list">
+          <li>Upload username:password format</li>
+          <li>Select rules for mutation</li>
+          <li>Increase depth for more variants</li>
+          <li>Export in any format</li>
+        </ul>
+      </div>
+
+      <div class="sidebar-card">
+        <h3 class="card-title">🔐 Features</h3>
+        <ul class="features-list">
+          <li>✓ Multi-stage mutations</li>
+          <li>✓ Advanced rules engine</li>
+          <li>✓ Custom patterns</li>
+          <li>✓ Export to CSV/JSON</li>
+          <li>✓ Real-time preview</li>
+        </ul>
+      </div>
+    </aside>
+
+  </div>
+
+  <!-- Footer -->
+  <footer class="footer">
+    <div class="footer-content">
+      <p>🚀 Password Variant Generator PRO | © 2026 by teddyvrp | Multi-Stage Mutation Engine v2.0</p>
+    </div>
+  </footer>
+
+  <script src="js/app.js"></script>
+</body>
+</html>
